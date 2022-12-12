@@ -1,0 +1,120 @@
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import *
+from pyspark.sql import functions as F
+import re
+
+# Create a spark session
+spark = SparkSession.builder.appName('pyspark - example join').getOrCreate()
+
+
+#######################################################################################
+#### 1. Create 3 data frames with the below data :D
+#######################################################################################
+
+
+# Create the spark Employees Dataframe
+employeeColumn = ["emp_no", "birth_date", "first_name", "last_name", "gender", "hire_date"] 
+employeeData = [
+["10001","1953-09-02","Georgi","Facello","M","1986-06-26"],
+["10002","1964-06-02","Bezalel","Simmel","F","1985-11-21"],
+["10003","1959-12-03","Parto","Bamford","M","1986-08-28"],
+["10004","1954-05-01","Chirstian","Koblick","M","1986-12-01"],
+["10005","1955-01-21","Kyoichi","Maliniak","M","1989-09-12"]
+]
+
+df_employees = spark.createDataFrame(data=employeeData,
+                           schema=employeeColumn)
+#df_employees.show()
+
+
+# Create the spark Jobs Dataframe
+jobColumn = ["emp_no", "title", "from_date" , "to_date"] 
+jobData = [
+["10001","Senior Engineer","1986-06-26","9999-01-01"],
+["10002","Staff","1996-08-03","9999-01-01"],
+["10003","Senior Engineer","1995-12-03","9999-01-01"],
+["10004","Senior Engineer","1995-12-01","9999-01-01"],
+["10005","Senior Staff","1996-09-12","9999-01-01"]
+]
+
+df_jobs = spark.createDataFrame(data=jobData,
+                           schema=jobColumn)
+
+#df_jobs.show()
+
+
+# Create the spark Salaries Dataframe
+salaryColumn = ["emp_no", "salary", "from_date" , "to_date"] 
+salaryData = [
+["10001","66074","1988-06-25","1989-06-25"], ["10001","62102","1987-06-26","1988-06-25"], ["10001","60117","1986-06-26","1987-06-26"] , ["10002","72527","2001-08-02","9999-01-01"], ["10002","71963","2000-08-02","2001-08-02"], ["10002","69366","1999-08-03","2000-08-02"] ,
+["10003","43311","2001-12-01","9999-01-01"], ["10003","43699","2000-12-01","2001-12-01"], ["10003","43478","1999-12-02","2000-12-01"] ,
+["10004","74057","2001-11-27","9999-01-01"], ["10004","70698","2000-11-27","2001-11-27"], ["10004","69722","1999-11-28","2000-11-27"],
+["10005","94692","2001-09-09","9999-01-01"], ["10005","91453","2000-09-09","2001-09-09"], ["10005","90531","1999-09-10","2000-09-09"]
+]
+
+df_salaryes = spark.createDataFrame(data=salaryData,
+                           schema=salaryColumn)
+
+#df_salaryes.show()
+
+
+#######################################################################################
+#### 2. Rename the columns by using using capital letters and replace '_' with space
+#######################################################################################
+
+df_employees_final = df_employees.toDF(*[re.sub('_', ' ', c) for c in df_employees.columns])
+for col in df_employees_final.columns:
+    df_employees_final = df_employees_final.withColumnRenamed(col, col.upper())
+#df_employees_final.show()
+
+df_jobs_final = df_jobs.toDF(*[re.sub('_', ' ', c) for c in df_jobs.columns])
+for col in df_jobs_final.columns:
+    df_jobs_final = df_jobs_final.withColumnRenamed(col, col.upper())
+#df_jobs_final.show()
+
+df_salaries_final = df_salaryes.toDF(*[re.sub('_', ' ', c) for c in df_salaryes.columns])
+for col in df_salaries_final.columns:
+    df_salaries_final = df_salaries_final.withColumnRenamed(col, col.upper())
+#df_salaries_final.show()
+
+#######################################################################################
+#### 3. Format birth_date as 01.Jan.2021
+#######################################################################################
+df_employees_final = df_employees_final.withColumn("BIRTH DATE", to_date("BIRTH DATE"))
+#df_employees_final.printSchema()
+df_employees_final=df_employees_final.withColumn("BIRTH DATE",  date_format("BIRTH DATE", "dd.MMM.yyyy"))
+#df_employees_final.show()
+
+#######################################################################################
+#### 4. Add a new column in employeeData where you compute the company email address 
+# by the following rule: [first 2 letter of first_name][last_name]@company.com
+#######################################################################################
+df_employees_final = df_employees_final.withColumn('EMAIL', 
+                    F.concat(F.col('FIRST NAME').substr(1, 2),F.lit('_'), F.col('LAST NAME'), F.lit('@company.com')))
+df_employees_final.show()
+
+
+#######################################################################################
+#### 5. Calculate the average salary for each job role
+#######################################################################################
+
+
+CalSalary_df = df_jobs_final.join(df_salaries_final,'EMP NO').select(df_jobs_final['TITLE'], df_salaries_final['SALARY'].alias('SALARY'))
+df_avg_salary_df = CalSalary_df.groupBy("TITLE").agg({"SALARY":"avg"})
+
+df_avg_salary_df.show()
+
+#######################################################################################
+#### 6. Add a flag (set value to True) in salaryData if the average salary of the person 
+# is lower than the average salary for their job role
+#######################################################################################
+
+df_salaries_final = df_salaries_final.join(df_jobs_final,["EMP NO"]) \
+     .join(df_avg_salary_df,df_jobs_final["TITLE"] == df_avg_salary_df["TITLE"]) \
+     .select(df_salaries_final['EMP NO'], df_salaries_final['SALARY'], df_salaries_final['FROM DATE'], df_salaries_final['TO DATE'], \
+      F.when((df_salaries_final["SALARY"] < df_avg_salary_df["avg(SALARY)"]), lit("TRUE")) \
+     .otherwise(lit("FALSE")).alias('FLAG'))
+
+
+df_salaries_final.show()       
+

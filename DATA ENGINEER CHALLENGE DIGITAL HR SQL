@@ -1,0 +1,69 @@
+--------------------------------------------------------------------------------------------
+--------------------------------------------------------------------------------------------
+-- Given the table schemas below, write a query to print a new pizza recipe that includes 
+-- the most used 5 ingredients in all the ordered pizzas in the past 6 months.
+--------------------------------------------------------------------------------------------
+--------------------------------------------------------------------------------------------
+
+WITH cte_ingredients_rank AS (
+SELECT I.id, I.name, ROW_NUMBER()  OVER (ORDER  BY COUNT(*) DESC) AS RNK
+FROM DBT_FEDERICOMA.Pizza AS P
+INNER JOIN DBT_FEDERICOMA.Orders AS O
+    ON O.pizza_id = P.ID
+AND O.order_time >=DATEADD(MONTH,-16,CURRENT_DATE()),   ---- SETTING 16 Month because the order date year is in 2021 and not 2022
+lateral flatten(input=>split(P.ingredients, ',')) c
+INNER JOIN DBT_FEDERICOMA.Ingredients AS I
+ON replace(c.value, '"') = I.id
+GROUP BY I.id, I.name
+)
+
+
+SELECT 'New_Pizza', listagg(ID, ',') ingredients FROM cte_ingredients_rank WHERE RNK <= 5;
+
+
+--------------------------------------------------------------------------------------------
+--------------------------------------------------------------------------------------------
+-- Help the cook by generating an alphabetically ordered comma separated ingredient list for 
+-- each ordered pizza and add a 2x in front of any ingredient that is 
+-- requested as extra and is present in the standard recipe too.
+--------------------------------------------------------------------------------------------
+--------------------------------------------------------------------------------------------
+
+
+WITH cte_orders_basico AS (
+SELECT O.order_id, O.customer_id, O.pizza_id, O.order_time, I.name, 1 as Qty
+FROM DBT_FEDERICOMA.Pizza AS P
+INNER JOIN DBT_FEDERICOMA.Orders AS O
+    ON O.pizza_id = P.ID,
+lateral flatten(input=>split(P.ingredients, ',')) c
+INNER JOIN DBT_FEDERICOMA.Ingredients AS I
+ON replace(c.value, '"') = I.id
+    UNION ALL
+SELECT O.order_id, O.customer_id, O.pizza_id, O.order_time, I.name, 1 as Qty
+FROM DBT_FEDERICOMA.Pizza AS P
+INNER JOIN DBT_FEDERICOMA.Orders AS O
+    ON O.pizza_id = P.ID,
+lateral flatten(input=>split(O.Extras, ',')) c
+INNER JOIN DBT_FEDERICOMA.Ingredients AS I
+    WHERE O.Extras IS NOT NULL
+    UNION ALL
+SELECT O.order_id, O.customer_id, O.pizza_id, O.order_time, I.name, -1 as Qty
+FROM DBT_FEDERICOMA.Pizza AS P
+INNER JOIN DBT_FEDERICOMA.Orders AS O
+    ON O.pizza_id = P.ID,
+lateral flatten(input=>split(O.EXCLUSIONS, ',')) c
+INNER JOIN DBT_FEDERICOMA.Ingredients AS I
+    WHERE O.EXCLUSIONS IS NOT NULL    
+),
+cte_orders as (
+SELECT order_id, customer_id, pizza_id, order_time, name, CASE WHEN SUM(Qty) > 1 then CONCAT(SUM(Qty), 'X', name) ELSE NAME END AS STD_NAME  
+FROM cte_orders_basico
+GROUP BY order_id, customer_id, pizza_id, order_time, name
+HAVING SUM(Qty) > 0
+)
+
+
+SELECT order_id, customer_id, pizza_id, order_time, listagg(STD_NAME, ',') WITHIN GROUP(ORDER BY NAME) ingredients FROM cte_orders
+GROUP BY order_id, customer_id, pizza_id, order_time
+ORDER BY order_id DESC;
+
